@@ -1,3 +1,4 @@
+import { DEFAULT_RATE_LIMIT, MAX_RATE_LIMIT, TO_MINUTES } from "./constants";
 import type {
   DomainWhitelist,
   IPWhitelist,
@@ -7,161 +8,19 @@ import type {
   RateLimit,
   RateLimitFrequency,
 } from "./types";
-import { generateID, sha256 } from "./utils";
-
-// ─────────────────────────────────────────────
-//  Constants
-// ─────────────────────────────────────────────
-
-export const DEFAULT_RATE_LIMIT: RateLimit = {
-  amount: 100,
-  frequency: "minutes",
-} as const;
-
-/**
- * Hard ceiling for any rate limit set on a MajikAPI key.
- * No key — regardless of trust level — may exceed this without bypassSafeLimit.
- * Expressed in req/min for normalisation purposes; stored as a RateLimit for
- * consistency with the rest of the API.
- */
-export const MAX_RATE_LIMIT: RateLimit = {
-  amount: 500,
-  frequency: "minutes",
-} as const;
-
-/** Multipliers to convert each frequency unit into requests-per-minute. */
-const TO_MINUTES: Record<RateLimitFrequency, number> = {
-  seconds: 1 / 60,
-  minutes: 1,
-  hours: 60,
-};
-
-// ─────────────────────────────────────────────
-//  Validation Helpers
-// ─────────────────────────────────────────────
-
-function assertString(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new TypeError(
-      `[MajikAPI] "${label}" must be a non-empty string. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-function assertPositiveInteger(
-  value: unknown,
-  label: string,
-): asserts value is number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new RangeError(
-      `[MajikAPI] "${label}" must be a positive integer. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-function assertRateLimitFrequency(
-  value: unknown,
-  label: string,
-): asserts value is RateLimitFrequency {
-  const valid: RateLimitFrequency[] = ["seconds", "minutes", "hours"];
-  if (!valid.includes(value as RateLimitFrequency)) {
-    throw new TypeError(
-      `[MajikAPI] "${label}" must be one of: ${valid.join(", ")}. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-function assertBoolean(
-  value: unknown,
-  label: string,
-): asserts value is boolean {
-  if (typeof value !== "boolean") {
-    throw new TypeError(
-      `[MajikAPI] "${label}" must be a boolean. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-function assertStringArray(
-  value: unknown,
-  label: string,
-): asserts value is string[] {
-  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
-    throw new TypeError(
-      `[MajikAPI] "${label}" must be an array of strings. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-function isValidIPv4(ip: string): boolean {
-  return (
-    /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) &&
-    ip.split(".").every((o) => parseInt(o) <= 255)
-  );
-}
-
-function isValidIPv6(ip: string): boolean {
-  return /^[0-9a-fA-F:]+$/.test(ip) && ip.includes(":");
-}
-
-function isValidCIDR(cidr: string): boolean {
-  const [ip, prefix] = cidr.split("/");
-  if (!prefix) return false;
-  const p = parseInt(prefix);
-  return (
-    (isValidIPv4(ip) && p >= 0 && p <= 32) ||
-    (isValidIPv6(ip) && p >= 0 && p <= 128)
-  );
-}
-
-function validateIP(ip: string): void {
-  if (!isValidIPv4(ip) && !isValidIPv6(ip) && !isValidCIDR(ip)) {
-    throw new Error(`[MajikAPI] Invalid IP address or CIDR: "${ip}"`);
-  }
-}
-
-function isValidDomain(domain: string): boolean {
-  return (
-    /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/.test(
-      domain,
-    ) || /^\*$/.test(domain)
-  );
-}
-
-function validateDomain(domain: string): void {
-  if (!isValidDomain(domain)) {
-    throw new Error(`[MajikAPI] Invalid domain: "${domain}"`);
-  }
-}
-
-function isValidISODate(value: string): boolean {
-  const d = new Date(value);
-  return !isNaN(d.getTime());
-}
-
-// ─────────────────────────────────────────────
-//  Default Settings Factory
-// ─────────────────────────────────────────────
-
-function buildDefaultSettings(
-  overrides?: Partial<MajikAPISettings>,
-): MajikAPISettings {
-  return {
-    rateLimit: { ...DEFAULT_RATE_LIMIT, ...(overrides?.rateLimit ?? {}) },
-    ipWhitelist: {
-      enabled: false,
-      addresses: [],
-      ...(overrides?.ipWhitelist ?? {}),
-    },
-    domainWhitelist: {
-      enabled: false,
-      domains: [],
-      ...(overrides?.domainWhitelist ?? {}),
-    },
-    allowedMethods: overrides?.allowedMethods ?? [],
-    metadata: overrides?.metadata ?? {},
-  };
-}
+import {
+  assertBoolean,
+  assertPositiveInteger,
+  assertRateLimitFrequency,
+  assertString,
+  assertStringArray,
+  buildDefaultSettings,
+  generateID,
+  isValidISODate,
+  sha256,
+  validateDomain,
+  validateIP,
+} from "./utils";
 
 // ─────────────────────────────────────────────
 //  MajikAPI Class
@@ -394,12 +253,6 @@ export class MajikAPI {
     assertString(this._owner_id, "owner_id");
     assertString(this._name, "name");
     assertString(this._api_key, "api_key");
-
-    if (!/^[a-f0-9]{64}$/.test(this._api_key)) {
-      throw new Error(
-        "[MajikAPI] validate(): 'api_key' does not appear to be a valid SHA-256 hash.",
-      );
-    }
 
     if (
       !(this._timestamp instanceof Date) ||

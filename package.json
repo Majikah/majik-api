@@ -2,7 +2,7 @@
   "name": "@majikah/majik-api",
   "type": "module",
   "description": "A high-security API key management library for TypeScript. Handles generation, SHA-256 hashing, and lifecycle management including rate limiting, IP/domain whitelisting, and secure key rotation.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "Apache-2.0",
   "author": "Zelijah",
   "main": "./dist/index.js",
