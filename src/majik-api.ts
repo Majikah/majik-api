@@ -5,6 +5,8 @@ import type {
   MajikAPICreateOptions,
   MajikAPIJSON,
   MajikAPISettings,
+  Quota,
+  QuotaFrequency,
   RateLimit,
   RateLimitFrequency,
 } from "./types";
@@ -21,6 +23,19 @@ import {
   validateDomain,
   validateIP,
 } from "./utils";
+
+// ─────────────────────────────────────────────
+//  Constants
+// ─────────────────────────────────────────────
+
+const VALID_QUOTA_FREQUENCIES: QuotaFrequency[] = [
+  "hours",
+  "days",
+  "weeks",
+  "months",
+  "quarters",
+  "years",
+];
 
 // ─────────────────────────────────────────────
 //  MajikAPI Class
@@ -161,6 +176,7 @@ export class MajikAPI {
    * Accepts the raw output of `toJSON()`, a Supabase row, or a Redis cache hit.
    *
    * `raw_api_key` is intentionally NOT restored — it is never in the JSON.
+   * `is_valid` is intentionally NOT restored — it is a computed getter.
    */
   static fromJSON(data: MajikAPIJSON): MajikAPI {
     if (typeof data !== "object" || data === null || Array.isArray(data)) {
@@ -226,6 +242,7 @@ export class MajikAPI {
    * Serialise to a plain JSON-safe object matching MajikAPIJSON.
    * Safe to store in Supabase or cache in Redis.
    * raw_api_key is NEVER included.
+   * is_valid is computed at serialisation time from isActive().
    */
   toJSON(): MajikAPIJSON {
     return {
@@ -236,6 +253,7 @@ export class MajikAPI {
       timestamp: this._timestamp.toISOString(),
       restricted: this._restricted,
       valid_until: this._valid_until ? this._valid_until.toISOString() : null,
+      is_valid: this.is_valid,
       settings: structuredClone(this._settings),
     };
   }
@@ -328,10 +346,10 @@ export class MajikAPI {
    * (500 req/min). Attempting to set a higher rate will throw unless
    * bypassSafeLimit is explicitly passed as true.
    *
-   * @param amount        - Number of allowed requests per frequency window.
-   * @param frequency     - The time window unit.
+   * @param amount          - Number of allowed requests per frequency window.
+   * @param frequency       - The time window unit.
    * @param bypassSafeLimit - When true, skips the MAX_RATE_LIMIT ceiling check.
-   *                        Defaults to false. Use with caution.
+   *                          Defaults to false. Use with caution.
    */
   setRateLimit(
     amount: number,
@@ -364,6 +382,74 @@ export class MajikAPI {
   /** Reset the rate limit back to DEFAULT_RATE_LIMIT. */
   resetRateLimit(): void {
     this._settings.rateLimit = { ...DEFAULT_RATE_LIMIT };
+  }
+
+  // ─────────────────────────────────────────────
+  //  Quota Management
+  // ─────────────────────────────────────────────
+
+  /**
+   * Set a fixed lifetime quota for this key.
+   * Once total usage reaches `limit`, isQuotaExceeded() returns true.
+   *
+   * @param limit - Maximum total number of requests allowed. Must be a
+   *                positive integer.
+   *
+   * @example
+   * key.setFixedQuota(10_000); // 10 000 requests total, ever
+   */
+  setFixedQuota(limit: number): void {
+    assertPositiveInteger(limit, "limit");
+    this._settings.quota = { type: "fixed", limit };
+  }
+
+  /**
+   * Set a periodic rolling quota for this key.
+   * Usage is expected to be tracked externally (e.g. in Redis or Supabase)
+   * and passed into isQuotaExceeded() for comparison.
+   *
+   * @param limit     - Maximum number of requests allowed per `frequency` window.
+   * @param frequency - The time window unit.
+   *
+   * @example
+   * key.setPeriodicQuota(50_000, "months"); // 50k requests per month
+   * key.setPeriodicQuota(1_000,  "days");   // 1k requests per day
+   */
+  setPeriodicQuota(limit: number, frequency: QuotaFrequency): void {
+    assertPositiveInteger(limit, "limit");
+    MajikAPI.assertQuotaFrequency(frequency, "frequency");
+    this._settings.quota = { type: "periodic", limit, frequency };
+  }
+
+  /**
+   * Remove any quota restriction from this key.
+   * After calling this, isQuotaExceeded() will always return false.
+   */
+  clearQuota(): void {
+    this._settings.quota = null;
+  }
+
+  /**
+   * Check whether the given usage count has met or exceeded this key's quota.
+   *
+   * This method does NOT track usage itself — `currentUsage` must be supplied
+   * by the caller from whatever store you use (Redis counter, Supabase
+   * aggregate, etc.).
+   *
+   * For a `fixed` quota, pass the key's all-time request count.
+   * For a `periodic` quota, pass the request count for the current window.
+   *
+   * Returns:
+   *   - `false` if quota is null (unlimited).
+   *   - `true`  if currentUsage >= the configured limit.
+   *   - `false` if currentUsage < the configured limit.
+   *
+   * @param currentUsage - The usage count to check against the quota.
+   */
+  isQuotaExceeded(currentUsage: number): boolean {
+    if (this._settings.quota === null) return false;
+    assertPositiveInteger(currentUsage, "currentUsage");
+    return currentUsage >= this._settings.quota.limit;
   }
 
   // ─────────────────────────────────────────────
@@ -622,6 +708,17 @@ export class MajikAPI {
     return this._valid_until ? new Date(this._valid_until) : null;
   }
 
+  /**
+   * Whether this key is valid for use right now.
+   * True when the key is active (not expired, not restricted).
+   *
+   * Note: this does NOT factor in quota — quota is a runtime check that
+   * requires external usage data. Use isQuotaExceeded(currentUsage) for that.
+   */
+  get is_valid(): boolean {
+    return this.isActive();
+  }
+
   /** Returns a deep clone — mutations to the returned object have no effect. */
   get settings(): Readonly<MajikAPISettings> {
     return structuredClone(this._settings);
@@ -629,6 +726,34 @@ export class MajikAPI {
 
   get rateLimit(): Readonly<RateLimit> {
     return { ...this._settings.rateLimit };
+  }
+
+  /**
+   * The current quota configuration.
+   * null means unlimited.
+   * Use isQuotaExceeded(currentUsage) to compare against live usage.
+   */
+  get quota(): Readonly<Quota> {
+    return this._settings.quota ? structuredClone(this._settings.quota) : null;
+  }
+
+  /**
+   * The configured quota limit, or null if no quota is set.
+   * Convenience shorthand for `key.quota?.limit ?? null`.
+   */
+  get quotaLimit(): number | null {
+    return this._settings.quota?.limit ?? null;
+  }
+
+  /**
+   * The quota frequency if this is a periodic quota, otherwise null.
+   * Useful for determining the reset window without inspecting the full quota object.
+   */
+  get quotaFrequency(): QuotaFrequency | null {
+    if (this._settings.quota?.type === "periodic") {
+      return this._settings.quota.frequency;
+    }
+    return null;
   }
 
   get ipWhitelist(): Readonly<IPWhitelist> {
@@ -693,6 +818,17 @@ export class MajikAPI {
     );
   }
 
+  private static assertQuotaFrequency(
+    value: unknown,
+    label: string,
+  ): asserts value is QuotaFrequency {
+    if (!VALID_QUOTA_FREQUENCIES.includes(value as QuotaFrequency)) {
+      throw new TypeError(
+        `[MajikAPI] "${label}" must be one of: ${VALID_QUOTA_FREQUENCIES.join(", ")}. Got: "${value}"`,
+      );
+    }
+  }
+
   private static validateSettings(settings: MajikAPISettings): void {
     if (typeof settings !== "object" || settings === null) {
       throw new TypeError("[MajikAPI] 'settings' must be an object.");
@@ -706,6 +842,28 @@ export class MajikAPI {
       settings.rateLimit?.frequency,
       "settings.rateLimit.frequency",
     );
+
+    // Validate quota if present
+    if (settings.quota !== null && settings.quota !== undefined) {
+      if (typeof settings.quota !== "object") {
+        throw new TypeError(
+          "[MajikAPI] 'settings.quota' must be an object or null.",
+        );
+      }
+      assertPositiveInteger(settings.quota.limit, "settings.quota.limit");
+      if (settings.quota.type === "fixed") {
+        // no extra fields to validate
+      } else if (settings.quota.type === "periodic") {
+        MajikAPI.assertQuotaFrequency(
+          settings.quota.frequency,
+          "settings.quota.frequency",
+        );
+      } else {
+        throw new TypeError(
+          `[MajikAPI] 'settings.quota.type' must be "fixed" or "periodic". Got: "${(settings.quota as any).type}"`,
+        );
+      }
+    }
 
     assertBoolean(
       settings.ipWhitelist?.enabled,
@@ -733,7 +891,7 @@ export class MajikAPI {
   // ─────────────────────────────────────────────
 
   toString(): string {
-    return `[MajikAPI id="${this._id}" owner="${this._owner_id}" name="${this._name}" status="${this.status}"]`;
+    return `[MajikAPI id="${this._id}" owner="${this._owner_id}" name="${this._name}" status="${this.status}" is_valid=${this.is_valid}]`;
   }
 
   [Symbol.for("nodejs.util.inspect.custom")](): string {

@@ -160,5 +160,6 @@ export function buildDefaultSettings(
     },
     allowedMethods: overrides?.allowedMethods ?? [],
     metadata: overrides?.metadata ?? {},
+    quota: overrides?.quota ?? null,
   };
 }
