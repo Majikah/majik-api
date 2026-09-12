@@ -72,6 +72,13 @@ export interface MajikAPIJSON {
   valid_until: string | null;
   is_valid: boolean;
   settings: MajikAPISettings;
+  /**
+   * Opaque foreign-key slot for the consuming application's own domain
+   * model — e.g. a developer/team/project id. MajikAPI itself has no
+   * opinion on what this references; it only stores and returns it.
+   * Optional/nullable so consumers with no such concept can ignore it.
+   */
+  reference_id?: string | null;
 }
 
 export interface MajikAPICreateOptions {
@@ -79,4 +86,6 @@ export interface MajikAPICreateOptions {
   restricted?: boolean;
   valid_until?: Date | string | null;
   settings?: Partial<MajikAPISettings>;
+  /** See MajikAPIJSON.reference_id. */
+  referenceId?: string | null;
 }

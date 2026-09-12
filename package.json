@@ -1,8 +1,8 @@
 {
   "name": "@majikah/majik-api",
   "type": "module",
-  "description": "A high-security API key management library for TypeScript. Handles generation, SHA-256 hashing, and lifecycle management including rate limiting, IP/domain whitelisting, and secure key rotation.",
-  "version": "0.1.2",
+  "description": "A TypeScript API key management library for secure credential hashing, lifecycle management, rotation, rate limits, quotas, IP/domain whitelisting, and access controls.",
+  "version": "1.0.0",
   "license": "Apache-2.0",
   "author": "Zelijah",
   "main": "./dist/index.js",
@@ -39,12 +39,18 @@
     "url": "https://github.com/Majikah/majik-api/issues"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "package": "npm run build && npm version patch && git push && git push --tags",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@stablelib/sha256": "^2.0.1",
-    "uuid": "^13.0.0"
+    "uuid": "^14.0.2"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
   }
 }

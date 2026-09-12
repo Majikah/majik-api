@@ -2,6 +2,7 @@ import { hash } from "@stablelib/sha256";
 import { v4 as uuidv4 } from "uuid";
 import { MajikAPISettings, RateLimitFrequency } from "./types";
 import { DEFAULT_RATE_LIMIT } from "./constants";
+import { MajikAPIValidationError } from "./errors";
 
 export function sha256(input: string): string {
   const hashed = hash(new TextEncoder().encode(input));
@@ -36,51 +37,6 @@ export function generateID(): string {
 // ─────────────────────────────────────────────
 //  Validation Helpers
 // ─────────────────────────────────────────────
-
-export function assertString(
-  value: unknown,
-  label: string,
-): asserts value is string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new TypeError(
-      `[MajikAPI] "${label}" must be a non-empty string. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-export function assertPositiveInteger(
-  value: unknown,
-  label: string,
-): asserts value is number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new RangeError(
-      `[MajikAPI] "${label}" must be a positive integer. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-export function assertRateLimitFrequency(
-  value: unknown,
-  label: string,
-): asserts value is RateLimitFrequency {
-  const valid: RateLimitFrequency[] = ["seconds", "minutes", "hours"];
-  if (!valid.includes(value as RateLimitFrequency)) {
-    throw new TypeError(
-      `[MajikAPI] "${label}" must be one of: ${valid.join(", ")}. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
-
-export function assertBoolean(
-  value: unknown,
-  label: string,
-): asserts value is boolean {
-  if (typeof value !== "boolean") {
-    throw new TypeError(
-      `[MajikAPI] "${label}" must be a boolean. Received: ${JSON.stringify(value)}`,
-    );
-  }
-}
 
 export function assertStringArray(
   value: unknown,
@@ -162,4 +118,31 @@ export function buildDefaultSettings(
     metadata: overrides?.metadata ?? {},
     quota: overrides?.quota ?? null,
   };
+}
+
+export function parseDateString(value: Date | string, label: string): Date {
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) {
+      throw new MajikAPIValidationError(
+        `"${label}" is an invalid Date object.`,
+        label,
+      );
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    // Assuming isValidISODate is available in your scope
+    const parsed = new Date(value);
+    if (isNaN(parsed.getTime())) {
+      throw new MajikAPIValidationError(
+        `"${label}" is not a valid ISO date string: "${value}"`,
+        label,
+      );
+    }
+    return parsed;
+  }
+  throw new MajikAPIValidationError(
+    `"${label}" must be a Date instance or an ISO date string.`,
+    label,
+  );
 }
