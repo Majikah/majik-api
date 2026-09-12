@@ -32,7 +32,8 @@
     "typescript",
     "supabase",
     "redis",
-    "majikah"
+    "majikah",
+    "cloudflare"
   ],
   "homepage": "https://github.com/Majikah/majik-api#readme",
   "bugs": {
